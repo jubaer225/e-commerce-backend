@@ -18,4 +18,19 @@ router.post(
   adminController.createProduct,
 );
 
+router.put(
+  "/edit-product/:id",
+  upload.single("images"),
+  [
+    body("title").notEmpty().withMessage("Title is required"),
+    body("price")
+      .isFloat({ gt: 0 })
+      .withMessage("Price must be a positive number"),
+    body("description").notEmpty().withMessage("Description is required"),
+  ],
+  adminController.editProduct,
+);
+
+router.delete("/delete-product/:id", adminController.deleteProduct);
+
 module.exports = router;

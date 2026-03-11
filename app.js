@@ -5,6 +5,8 @@ require("dotenv").config();
 const app = express();
 
 const adminRoutes = require("./routes/admin");
+const shopRoutes = require("./routes/shop");
+const authRoutes = require("./routes/auth");
 
 app.use(express.json());
 
@@ -19,6 +21,8 @@ app.use((req, res, next) => {
 });
 
 app.use("/admin", adminRoutes);
+app.use("/shop", shopRoutes);
+app.use("/auth", authRoutes);
 
 app.use((error, req, res, next) => {
   if (error && error.code === "LIMIT_FILE_SIZE") {
