@@ -2,6 +2,7 @@ const express = require("express");
 const { body } = require("express-validator");
 const router = express.Router();
 const upload = require("../middleware/upload");
+const isAuth = require("../config/isAuth");
 
 const User = require("../models/User");
 const authController = require("../controllers/authController");
@@ -33,5 +34,18 @@ router.post(
 );
 
 router.post("/login", authController.postLogin);
+
+router.post("/verify-email/:token", authController.verifyEmail);
+
+router.post(
+  "/resend-verification-email",
+  authController.resendVerificationEmail,
+);
+
+router.post("/forgot-password", authController.forgotPassword);
+
+router.post("/reset-password/:token", authController.resetPassword);
+
+router.put("/change-password", isAuth, authController.changePassword);
 
 module.exports = router;
