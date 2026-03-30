@@ -5,6 +5,8 @@ const categoryController = require("../controllers/categoryController");
 const cartController = require("../controllers/cartController");
 const orderController = require("../controllers/orderController");
 const addressController = require("../controllers/addressController");
+const reviewController = require("../controllers/reviewController");
+const wishlistController = require("../controllers/wishlistController");
 const isAuth = require("../config/isAuth");
 const upload = require("../middleware/upload");
 
@@ -66,5 +68,17 @@ router.patch(
   isAuth,
   addressController.setDefaultAddress,
 );
+
+router.post("/reviews", isAuth, reviewController.postReview);
+router.get("/reviews/:productId", reviewController.getReviewsByProduct);
+
+router.post("/wishlist/:productId", isAuth, wishlistController.addToWishlist);
+router.get("/wishlist", isAuth, wishlistController.getWishlist);
+router.delete(
+  "/wishlist/remove/:productId",
+  isAuth,
+  wishlistController.removeFromWishlist,
+);
+router.delete("/wishlist/clear", isAuth, wishlistController.clearWishlist);
 
 module.exports = router;
