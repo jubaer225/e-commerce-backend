@@ -3,6 +3,7 @@ const { body } = require("express-validator");
 const upload = require("../middleware/upload");
 const isAuth = require("../config/isAuth");
 const isAdmin = require("../config/isAdmin");
+const authorize = require("../config/authorize");
 const router = express.Router();
 const adminController = require("../controllers/adminController");
 const categoryController = require("../controllers/categoryController");
@@ -14,6 +15,8 @@ router.use(isAuth, isAdmin);
 router.get("/products", adminController.getProducts);
 router.post(
   "/add-product",
+  isAuth,
+  authorize("admin", "superadmin"),
   upload.single("images"),
   [
     body("title").notEmpty().withMessage("Title is required"),

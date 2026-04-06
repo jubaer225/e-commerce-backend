@@ -99,15 +99,32 @@ exports.postLogin = async (req, res) => {
       return res.status(401).json({ message: "Invalid password" });
     }
 
-    const token = jwt.sign(
-      { userId: user._id.toString(), email: user.email },
+    const accessToken = jwt.sign(
+      { userId: user._id.toString(), role: user.role },
       process.env.JWT_Secret,
       { expiresIn: "1h" },
     );
+
+    const refreshToken = jwt.sign(
+      { userId: user._id.toString(), email: user.email },
+      process.env.JWT_Refresh_Secret,
+      { expiresIn: "30d" },
+    );
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "strict",
+    });
+
     res.status(200).json({
       message: "Login successfull",
-      token: token,
-      userId: user._id.toString(),
+      accessToken: accessToken,
+      user: {
+        userId: user._id.toString(),
+        email: user.email,
+        role: user.role,
+      },
     });
   } catch (err) {
     console.error(err);
@@ -119,7 +136,13 @@ exports.postLogin = async (req, res) => {
 
 exports.verifyEmail = async (req, res) => {
   try {
-    const { token } = req.params;
+    const token = req.params.token || req.query.token || req.body.token;
+
+    if (!token) {
+      return res
+        .status(400)
+        .json({ message: "Verification token is required" });
+    }
 
     const user = await User.findOne({ verificationToken: token });
     if (!user) {
@@ -290,6 +313,63 @@ exports.changePassword = async (req, res) => {
     console.error(err);
     res.status(500).json({
       message: "An error occurred while changing the password",
+    });
+  }
+};
+
+exports.refreshToken = async (req, res) => {
+  try {
+    const refreshToken = req.cookies.refreshToken;
+    if (!refreshToken) {
+      return res.status(401).json({ message: "No refresh token provided" });
+    }
+    jwt.verify(
+      refreshToken,
+      process.env.JWT_Refresh_Secret,
+      async (err, decoded) => {
+        if (err) {
+          return res.status(401).json({ message: "Invalid refresh token" });
+        }
+        const user = await User.findById(decoded.userId);
+        if (!user) {
+          return res.status(401).json({ message: "User not found" });
+        }
+        const accessToken = jwt.sign(
+          { userId: user._id.toString(), role: user.role },
+          process.env.JWT_Secret,
+          { expiresIn: "1h" },
+        );
+        res.status(200).json({
+          message: "Token refreshed successfully",
+          accessToken,
+          user: {
+            userId: user._id.toString(),
+            email: user.email,
+            role: user.role,
+          },
+        });
+      },
+    );
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "An error occurred while refreshing the token",
+    });
+  }
+};
+
+exports.logout = async (req, res) => {
+  try {
+    res.clearCookie("refreshToken", {
+      httpOnly: true,
+      secure: true,
+      sameSite: "strict",
+    });
+    res.status(200).json({ message: "Logged out successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "An error occurred while logging out",
     });
   }
 };
