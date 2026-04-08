@@ -7,6 +7,13 @@ require("dotenv").config();
 const { sendEmail } = require("../config/sendEmails");
 const crypto = require("crypto");
 
+const isProduction = process.env.NODE_ENV === "production";
+const refreshCookieOptions = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
+};
+
 exports.postSignup = async (req, res) => {
   try {
     const { name, email, password, phone } = req.body;
@@ -111,11 +118,7 @@ exports.postLogin = async (req, res) => {
       { expiresIn: "30d" },
     );
 
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-    });
+    res.cookie("refreshToken", refreshToken, refreshCookieOptions);
 
     res.status(200).json({
       message: "Login successfull",
@@ -360,11 +363,7 @@ exports.refreshToken = async (req, res) => {
 
 exports.logout = async (req, res) => {
   try {
-    res.clearCookie("refreshToken", {
-      httpOnly: true,
-      secure: true,
-      sameSite: "strict",
-    });
+    res.clearCookie("refreshToken", refreshCookieOptions);
     res.status(200).json({ message: "Logged out successfully" });
   } catch (err) {
     console.error(err);

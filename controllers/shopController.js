@@ -4,22 +4,30 @@ const User = require("../models/User");
 const cloudinary = require("../config/cloudinary");
 
 exports.getAllProducts = async (req, res) => {
-  const currentPage = parseInt(req.query.page) || 1;
-  const itemsPerPage = parseInt(req.query.limit) || 10;
-  const skip = (currentPage - 1) * itemsPerPage;
-  let totalItems;
+  const { cursor, limit = 20 } = req.query;
+  let query = {};
+
+  if (cursor) {
+    query = { _id: { $lt: cursor } };
+  }
   try {
-    totalItems = await Product.countDocuments();
-    const products = await Product.find().skip(skip).limit(itemsPerPage);
+    const products = await Product.find(query)
+      .sort({ _id: -1 })
+      .limit(Number(limit) + 1);
+
+    let hasMore = false;
+    if (products.length > limit) {
+      hasMore = true;
+      products.pop();
+    }
+
+    const nextCursor = hasMore ? products[products.length - 1]._id : null;
+
     res.status(200).json({
       data: products,
       message: "Products retrieved successfully",
-      pagination: {
-        currentPage,
-        itemsPerPage,
-        totalItems,
-        totalPages: Math.ceil(totalItems / itemsPerPage),
-      },
+      nextCursor,
+      hasMore,
     });
   } catch (error) {
     res
@@ -83,7 +91,9 @@ exports.updateUserProfile = async (req, res) => {
     if (email && email !== user.email) {
       const existingUser = await User.findOne({ email, _id: { $ne: userId } });
       if (existingUser) {
-        return res.status(409).json({ message: "E-Mail address already exists" });
+        return res
+          .status(409)
+          .json({ message: "E-Mail address already exists" });
       }
       user.email = email;
       user.isVerified = false;
@@ -120,12 +130,10 @@ exports.updateUserProfile = async (req, res) => {
     delete userData.resetPasswordToken;
     delete userData.resetPasswordTokenExpiry;
 
-    res
-      .status(200)
-      .json({
-        message: "User profile updated successfully",
-        data: userData,
-      });
+    res.status(200).json({
+      message: "User profile updated successfully",
+      data: userData,
+    });
   } catch (error) {
     res
       .status(500)

@@ -3,7 +3,7 @@ module.exports = (req, res, next) => {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
-  if (req.userRole !== "admin") {
+  if (!["admin", "superadmin"].includes(req.userRole)) {
     return res.status(403).json({ message: "Not authorized" });
   }
 

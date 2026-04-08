@@ -1,5 +1,6 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const cookieParser = require("cookie-parser");
 require("dotenv").config();
 
 const app = express();
@@ -9,6 +10,7 @@ const shopRoutes = require("./routes/shop");
 const authRoutes = require("./routes/auth");
 
 app.use(express.json());
+app.use(cookieParser());
 
 const allowedOrigins = ["http://localhost:5173"];
 
