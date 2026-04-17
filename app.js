@@ -4,6 +4,7 @@ const cookieParser = require("cookie-parser");
 require("dotenv").config();
 
 const app = express();
+const PORT = process.env.PORT || 8080;
 
 const adminRoutes = require("./routes/admin");
 const shopRoutes = require("./routes/shop");
@@ -54,14 +55,29 @@ app.use((error, req, res, next) => {
   next();
 });
 
-mongoose
-  .connect(process.env.Mongodb_Uri, {
-    dbName: process.env.Database_Name,
-  })
-  .then((result) => {
-    app.listen(8080);
-    console.log("the Server is running on port 8080");
-  })
-  .catch((err) => {
+async function startServer() {
+  try {
+    await mongoose.connect(process.env.Mongodb_Uri, {
+      dbName: process.env.Database_Name,
+    });
+
+    const server = app.listen(PORT, () => {
+      console.log(`the Server is running on port ${PORT}`);
+    });
+
+    server.on("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(
+          `Port ${PORT} is already in use. Stop the existing server or set PORT to another value.`,
+        );
+        return;
+      }
+
+      console.error("Server failed to start:", err);
+    });
+  } catch (err) {
     console.error("Error connecting to MongoDB:", err);
-  });
+  }
+}
+
+startServer();
