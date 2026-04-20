@@ -165,7 +165,10 @@ async function buildProducts(totalProducts) {
         productNumber,
         imageNumber,
       );
-      images.push(uploadedImage.secureUrl);
+      images.push({
+        url: uploadedImage.secureUrl,
+        publicId: uploadedImage.publicId,
+      });
       imagePublicIds.push(uploadedImage.publicId);
     }
 

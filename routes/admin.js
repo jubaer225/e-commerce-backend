@@ -16,7 +16,7 @@ router.post(
   "/add-product",
   isAuth,
   authorize("admin", "superadmin"),
-  upload.single("images"),
+  upload.array("images", 5),
   [
     body("title").notEmpty().withMessage("Title is required"),
     body("price")
@@ -29,7 +29,7 @@ router.post(
 
 router.put(
   "/edit-product/:id",
-  upload.single("images"),
+  upload.array("images", 5),
   [
     body("title").notEmpty().withMessage("Title is required"),
     body("price")

@@ -2,6 +2,36 @@ const Product = require("../models/Product");
 const { validationResult } = require("express-validator");
 const cloudinary = require("../config/cloudinary");
 
+const uploadFileToCloudinary = (file) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "products" },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve({
+          publicId: result.public_id,
+          url: result.secure_url,
+        });
+      },
+    );
+    stream.end(file.buffer);
+  });
+};
+
+const getProductPublicIds = (product) => {
+  const imagePublicIds = Array.isArray(product.images)
+    ? product.images
+        .map((image) => image && (image.publicId || image.public_id))
+        .filter(Boolean)
+    : [];
+
+  if (product.imagePublicId) {
+    imagePublicIds.push(product.imagePublicId);
+  }
+
+  return [...new Set(imagePublicIds)];
+};
+
 exports.getProducts = (req, res) => {
   res.status(200).json({ message: "Admin Products will be here" });
 };
@@ -14,41 +44,29 @@ exports.createProduct = async (req, res) => {
         .status(422)
         .json({ errors: errors.array(), message: "Validation failed" });
     }
-    if (!req.file) {
+    if (!req.files || req.files.length === 0) {
       return res.status(422).json({ message: "Image file is required" });
     }
 
-    const uploadResult = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        { folder: "products" },
-        (error, result) => {
-          if (error) return reject(error);
-          resolve(result);
-        },
-      );
-      stream.end(req.file.buffer);
-    });
+    const images = await Promise.all(req.files.map(uploadFileToCloudinary));
+
     const { title, price, description, category, brand, stock } = req.body;
 
     const product = new Product({
       title,
       price,
       description,
-      images: [uploadResult.secure_url],
+      images,
+      imagePublicId: images[0]?.publicId,
       category,
       brand,
       stock,
-      imagePublicId: uploadResult.public_id,
     });
 
     const saved = await product.save();
     return res.status(201).json({
       message: "Product created successfully",
       data: saved,
-      cloudinary: {
-        public_id: uploadResult.public_id,
-        secure_url: uploadResult.secure_url,
-      },
     });
   } catch (err) {
     console.error("Error creating product:", err);
@@ -74,25 +92,21 @@ exports.editProduct = async (req, res) => {
     const { title, price, description, category, brand, stock } = req.body;
 
     // Only touch Cloudinary if a new image was actually uploaded
-    if (req.file) {
-      const uploadResult = await new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          { folder: "products" },
-          (error, result) => {
-            if (error) return reject(error);
-            resolve(result);
-          },
-        );
-        stream.end(req.file.buffer);
-      });
+    if (req.files && req.files.length > 0) {
+      const uploadedImages = await Promise.all(
+        req.files.map(uploadFileToCloudinary),
+      );
 
-      // Delete old image from Cloudinary only after new one is uploaded
-      if (product.imagePublicId) {
-        await cloudinary.uploader.destroy(product.imagePublicId);
-      }
+      // Delete old images only after the new ones are safely uploaded.
+      const previousPublicIds = getProductPublicIds(product);
+      await Promise.all(
+        previousPublicIds.map((publicId) =>
+          cloudinary.uploader.destroy(publicId),
+        ),
+      );
 
-      product.images = [uploadResult.secure_url];
-      product.imagePublicId = uploadResult.public_id;
+      product.images = uploadedImages;
+      product.imagePublicId = uploadedImages[0]?.publicId;
     }
 
     product.title = title;
@@ -122,9 +136,10 @@ exports.deleteProduct = async (req, res) => {
       return res.status(404).json({ message: "product is not found" });
     }
 
-    if (product.imagePublicId) {
-      await cloudinary.uploader.destroy(product.imagePublicId);
-    }
+    const publicIds = getProductPublicIds(product);
+    await Promise.all(
+      publicIds.map((publicId) => cloudinary.uploader.destroy(publicId)),
+    );
 
     await Product.findByIdAndDelete(productId);
     return res.status(200).json({ message: "Product deleted Successfully" });
