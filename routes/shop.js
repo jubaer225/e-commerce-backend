@@ -54,7 +54,8 @@ router.put("/cart/update", isAuth, cartController.updateCartItem);
 router.delete("/cart/remove/:productId", isAuth, cartController.removeCartItem);
 router.delete("/cart/clear", isAuth, cartController.clearCart);
 
-router.post("/orders", isAuth, orderController.createOrder);
+router.post("/checkout", isAuth, orderController.checkout);
+
 router.get("/orders", isAuth, orderController.getUserOrders);
 router.get("/orders/:id", isAuth, orderController.getOrderById);
 

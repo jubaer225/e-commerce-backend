@@ -11,6 +11,7 @@ const orderItemSchema = new mongoose.Schema({
     required: true,
     min: 1,
   },
+  name: String,
   price: {
     type: Number,
     required: true,
@@ -18,6 +19,11 @@ const orderItemSchema = new mongoose.Schema({
 });
 
 const orderSchema = new mongoose.Schema({
+  orderNumber: {
+    type: String,
+    required: true,
+    unique: true,
+  },
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "user",
@@ -51,6 +57,8 @@ const orderSchema = new mongoose.Schema({
     required: true,
     default: 0,
   },
+  stripeSessionId: String,
+  paymentIntentId: String,
 });
 
 module.exports = mongoose.model("Order", orderSchema);

@@ -9,6 +9,13 @@ const PORT = process.env.PORT || 8080;
 const adminRoutes = require("./routes/admin");
 const shopRoutes = require("./routes/shop");
 const authRoutes = require("./routes/auth");
+const orderController = require("./controllers/orderController");
+
+app.post(
+  "/shop/webhook",
+  express.raw({ type: "application/json" }),
+  orderController.handleStripeWebhook,
+);
 
 app.use(express.json());
 app.use(cookieParser());
