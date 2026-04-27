@@ -15,8 +15,17 @@ const getStripeClient = () => {
   return new Stripe(process.env.STRIPE_SECRET_KEY);
 };
 
+const getClientBaseUrl = () => {
+  if (!process.env.CLIENT_URL) {
+    throw new Error("CLIENT_URL is not configured");
+  }
+
+  return process.env.CLIENT_URL.replace(/\/+$/, "");
+};
+
 exports.createCheckoutSession = async (userId, shippingAddress) => {
   const stripe = getStripeClient();
+  const clientBaseUrl = getClientBaseUrl();
   const cart = await Cart.findOne({ user: userId }).populate("items.product");
 
   if (!cart || cart.items.length === 0) {
@@ -72,8 +81,8 @@ exports.createCheckoutSession = async (userId, shippingAddress) => {
       quantity: item.quantity,
     })),
 
-    success_url: `${process.env.CLIENT_URL}/order-success?orderId=${order._id}`,
-    cancel_url: `${process.env.CLIENT_URL}/cart`,
+    success_url: `${clientBaseUrl}/order-success?orderId=${order._id}`,
+    cancel_url: `${clientBaseUrl}/cart`,
 
     metadata: {
       orderId: order._id.toString(),

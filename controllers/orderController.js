@@ -17,6 +17,122 @@ const getStripeClient = () => {
   return new Stripe(process.env.STRIPE_SECRET_KEY);
 };
 
+const getStripeWebhookSecret = () => {
+  if (!process.env.STRIPE_WEBHOOK_SECRET) {
+    throw new Error("STRIPE_WEBHOOK_SECRET is not configured");
+  }
+
+  return process.env.STRIPE_WEBHOOK_SECRET;
+};
+
+const finalizePaidOrder = async (order, paymentIntentId) => {
+  if (order.paymentStatus === "paid") {
+    return;
+  }
+
+  order.paymentStatus = "paid";
+  order.orderStatus = "processing";
+  order.paymentIntentId = paymentIntentId || order.paymentIntentId;
+  await order.save();
+
+  for (const item of order.items) {
+    const updatedProduct = await Product.findOneAndUpdate(
+      {
+        _id: item.product,
+        stock: { $gte: item.quantity },
+      },
+      {
+        $inc: { stock: -item.quantity },
+      },
+      { new: true },
+    );
+
+    if (!updatedProduct) {
+      console.error(`Stock issue for product ${item.product}`);
+    }
+  }
+
+  await Cart.findOneAndUpdate({ user: order.user }, { $set: { items: [] } });
+};
+
+const reconcileStripeOrderPayment = async (order) => {
+  if (
+    !order ||
+    order.paymentMethod !== "stripe" ||
+    order.paymentStatus === "paid" ||
+    !order.stripeSessionId
+  ) {
+    return order;
+  }
+
+  const stripe = getStripeClient();
+  const session = await stripe.checkout.sessions.retrieve(
+    order.stripeSessionId,
+  );
+
+  if (session && session.payment_status === "paid") {
+    await finalizePaidOrder(order, session.payment_intent);
+  }
+
+  return order;
+};
+
+const refundStripePaymentForOrder = async (order) => {
+  if (
+    !order ||
+    order.paymentMethod !== "stripe" ||
+    order.paymentStatus !== "paid"
+  ) {
+    return { attempted: false };
+  }
+
+  const stripe = getStripeClient();
+  let paymentIntentId = order.paymentIntentId;
+
+  if (!paymentIntentId && order.stripeSessionId) {
+    const session = await stripe.checkout.sessions.retrieve(
+      order.stripeSessionId,
+    );
+    paymentIntentId = session?.payment_intent || null;
+  }
+
+  if (!paymentIntentId) {
+    throw new Error("Missing Stripe payment intent for refund");
+  }
+
+  const existingRefunds = await stripe.refunds.list({
+    payment_intent: paymentIntentId,
+    limit: 1,
+  });
+
+  if (existingRefunds.data.length > 0) {
+    const existingRefund = existingRefunds.data[0];
+    return {
+      attempted: true,
+      alreadyRefunded: true,
+      refundId: existingRefund.id,
+      refundStatus: existingRefund.status,
+      paymentIntentId,
+    };
+  }
+
+  const refund = await stripe.refunds.create({
+    payment_intent: paymentIntentId,
+    metadata: {
+      orderId: String(order._id),
+      orderNumber: order.orderNumber || "",
+    },
+  });
+
+  return {
+    attempted: true,
+    alreadyRefunded: false,
+    refundId: refund.id,
+    refundStatus: refund.status,
+    paymentIntentId,
+  };
+};
+
 exports.getUserOrders = async (req, res) => {
   try {
     const userId = req.userId;
@@ -46,9 +162,13 @@ exports.getOrderById = async (req, res) => {
     const order = await Order.findOne({ _id: orderId, user: userId })
       .populate("user", "name")
       .populate("items.product", "title price images");
+
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
+
+    await reconcileStripeOrderPayment(order);
+
     res
       .status(200)
       .json({ message: "Order retrieved successfully", data: order });
@@ -95,18 +215,53 @@ exports.updateOrderStatus = async (req, res) => {
   }
 };
 
-exports.deleteOrder = async (req, res) => {
+exports.cancelOrder = async (req, res) => {
   try {
+    const userId = req.userId;
     const orderId = req.params.id;
+
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
       return res.status(400).json({ message: "Invalid order ID" });
     }
 
-    const order = await Order.findByIdAndDelete(orderId);
+    const order = await Order.findOne({ _id: orderId, user: userId });
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
-    res.status(200).json({ message: "Order deleted successfully" });
+
+    if (order.orderStatus === "cancelled") {
+      return res.status(400).json({ message: "Order is already cancelled" });
+    }
+
+    let refundResult = { attempted: false };
+
+    if (order.paymentMethod === "stripe" && order.paymentStatus === "paid") {
+      try {
+        refundResult = await refundStripePaymentForOrder(order);
+      } catch (refundError) {
+        console.error("Stripe refund failed:", refundError.message);
+        return res.status(400).json({
+          message:
+            "Order cancellation failed because Stripe refund could not be processed",
+        });
+      }
+    }
+
+    order.orderStatus = "cancelled";
+    await order.save();
+
+    if (refundResult.attempted) {
+      return res.status(200).json({
+        message: "Order cancelled and Stripe refund processed",
+        refund: {
+          id: refundResult.refundId,
+          status: refundResult.refundStatus,
+          alreadyRefunded: refundResult.alreadyRefunded,
+        },
+      });
+    }
+
+    res.status(200).json({ message: "Order cancelled successfully" });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Internal server error" });
@@ -132,16 +287,29 @@ exports.checkout = async (req, res) => {
 
 exports.handleStripeWebhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
-  const stripe = getStripeClient();
+  if (!sig) {
+    return res
+      .status(400)
+      .send("Webhook Error: Missing stripe-signature header");
+  }
+
+  let stripe;
+  let webhookSecret;
+
+  try {
+    stripe = getStripeClient();
+    webhookSecret = getStripeWebhookSecret();
+  } catch (err) {
+    console.error("Stripe webhook configuration error:", err.message);
+    return res
+      .status(500)
+      .send("Webhook Error: Stripe webhook is not configured");
+  }
 
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET,
-    );
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
   } catch (err) {
     console.error("Webhook signature verification failed:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -162,42 +330,7 @@ exports.handleStripeWebhook = async (req, res) => {
           return res.json({ received: true });
         }
 
-        // 🔥 prevent duplicate execution (VERY IMPORTANT)
-        if (order.paymentStatus === "paid") {
-          return res.json({ received: true });
-        }
-
-        // 1. update order
-        order.paymentStatus = "paid";
-        order.orderStatus = "processing";
-        order.paymentIntentId = session.payment_intent;
-
-        await order.save();
-
-        // 2. reduce stock safely
-        for (const item of order.items) {
-          const updatedProduct = await Product.findOneAndUpdate(
-            {
-              _id: item.product,
-              stock: { $gte: item.quantity },
-            },
-            {
-              $inc: { stock: -item.quantity },
-            },
-            { new: true },
-          );
-
-          if (!updatedProduct) {
-            console.error(`Stock issue for product ${item.product}`);
-            // You could mark order as failed here if needed
-          }
-        }
-
-        // 3. clear cart (optional but recommended)
-        await Cart.findOneAndUpdate(
-          { user: order.user },
-          { $set: { items: [] } },
-        );
+        await finalizePaidOrder(order, session.payment_intent);
 
         break;
       }
