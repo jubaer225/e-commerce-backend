@@ -3,13 +3,36 @@ const Product = require("../models/Product");
 const mongoose = require("mongoose");
 const Order = require("../models/order.model");
 
+const updateProductRatingSummary = async (productId) => {
+  const [summary] = await Review.aggregate([
+    { $match: { product: new mongoose.Types.ObjectId(productId) } },
+    {
+      $group: {
+        _id: "$product",
+        averageRating: { $avg: "$rating" },
+        numberOfReviews: { $sum: 1 },
+      },
+    },
+  ]);
+
+  await Product.findByIdAndUpdate(productId, {
+    averageRating: summary ? summary.averageRating : 0,
+    numberOfReviews: summary ? summary.numberOfReviews : 0,
+  });
+};
+
 exports.postReview = async (req, res) => {
   try {
     const userId = req.userId;
-    const { productId, rating, comment } = req.body;
+    const { productId } = req.params;
+    const { orderId, rating, comment } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(productId)) {
       return res.status(400).json({ message: "Invalid productId" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ message: "Invalid orderId" });
     }
 
     const existingReview = await Review.findOne({
@@ -28,22 +51,26 @@ exports.postReview = async (req, res) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    const hasPurchased = await Order.exists({
+    const order = await Order.findOne({
+      _id: orderId,
       user: userId,
       "items.product": productId,
     });
-    if (!hasPurchased) {
+
+    if (!order) {
       return res.status(400).json({
-        message: "You must purchase this product before reviewing it",
+        message: "The selected order does not include this product",
       });
     }
     const review = new Review({
       user: userId,
       product: productId,
+      order: orderId,
       rating,
       comment,
     });
     await review.save();
+    await updateProductRatingSummary(productId);
     res
       .status(201)
       .json({ message: "Review submitted successfully", data: review });
@@ -88,6 +115,7 @@ exports.updateReview = async (req, res) => {
     review.rating = rating || review.rating;
     review.comment = comment || review.comment;
     await review.save();
+    await updateProductRatingSummary(review.product);
     res
       .status(200)
       .json({ message: "Review updated successfully", data: review });
@@ -108,6 +136,7 @@ exports.deleteReview = async (req, res) => {
       return res.status(404).json({ message: "Review not found" });
     }
     await review.remove();
+    await updateProductRatingSummary(review.product);
     res.status(200).json({ message: "Review deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: "Internal server error" });

@@ -50,10 +50,25 @@ router.put("/categories/:id", categoryController.editCategory);
 
 router.delete("/categories/:id", categoryController.deleteCategory);
 
-router.get("/orders", orderController.getAllOrders);
-router.get("/orders/:id", orderController.getOrderById);
-router.patch("/orders/:id/status", orderController.updateOrderStatus);
-router.delete("/orders/:id", orderController.deleteOrder);
+router.get(
+  "/orders",
+  isAuth,
+  authorize("admin", "superadmin"),
+  orderController.getAllOrders,
+);
+router.patch(
+  "/orders/:id/status",
+  isAuth,
+  authorize("admin", "superadmin"),
+  orderController.updateOrderStatus,
+);
+
+router.get(
+  "/orders/:id",
+  isAuth,
+  authorize("admin", "superadmin"),
+  orderController.getOrderById,
+);
 
 router.put("/reviews/:id", reviewController.updateReview);
 router.delete("/reviews/:id", reviewController.deleteReview);

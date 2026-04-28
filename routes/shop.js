@@ -58,6 +58,11 @@ router.post("/checkout", isAuth, orderController.checkout);
 
 router.get("/orders", isAuth, orderController.getUserOrders);
 router.get("/orders/:id", isAuth, orderController.getOrderById);
+router.get(
+  "/orders/:id/sync-payment",
+  isAuth,
+  orderController.syncStripePaymentStatus,
+);
 router.patch("/orders/:id/status", isAuth, orderController.updateOrderStatus);
 router.patch("/orders/:id/cancel", isAuth, orderController.cancelOrder);
 

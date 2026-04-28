@@ -81,7 +81,7 @@ exports.createCheckoutSession = async (userId, shippingAddress) => {
       quantity: item.quantity,
     })),
 
-    success_url: `${clientBaseUrl}/order-success?orderId=${order._id}`,
+    success_url: `${clientBaseUrl}/order-success?orderId=${order._id}&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${clientBaseUrl}/cart`,
 
     metadata: {

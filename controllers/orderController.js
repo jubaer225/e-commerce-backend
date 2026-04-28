@@ -44,7 +44,7 @@ const finalizePaidOrder = async (order, paymentIntentId) => {
       {
         $inc: { stock: -item.quantity },
       },
-      { new: true },
+      { returnDocument: "after" },
     );
 
     if (!updatedProduct) {
@@ -156,6 +156,7 @@ exports.getOrderById = async (req, res) => {
   try {
     const userId = req.userId;
     const orderId = req.params.id;
+    
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
       return res.status(400).json({ message: "Invalid order ID" });
     }
@@ -178,14 +179,77 @@ exports.getOrderById = async (req, res) => {
   }
 };
 
-exports.getAllOrders = async (req, res) => {
+exports.syncStripePaymentStatus = async (req, res) => {
   try {
-    const orders = await Order.find()
+    const userId = req.userId;
+    const orderId = req.params.id;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ message: "Invalid order ID" });
+    }
+
+    const order = await Order.findOne({ _id: orderId, user: userId })
       .populate("user", "name")
-      .populate("items.product", "title price");
-    res
-      .status(200)
-      .json({ message: "Orders retrieved successfully", data: orders });
+      .populate("items.product", "title price images");
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    await reconcileStripeOrderPayment(order);
+
+    return res.status(200).json({
+      message: "Payment status synchronized successfully",
+      data: order,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+exports.getAllOrders = async (req, res) => {
+  const { cursor, limit = 20, search } = req.query;
+  const parsedLimit = Number.parseInt(limit, 10);
+  const pageSize = Number.isNaN(parsedLimit)
+    ? 20
+    : Math.min(Math.max(parsedLimit, 1), 100);
+  try {
+    let query = {};
+
+    if (search) {
+      query.$or = [
+        { orderNumber: { $regex: search, $options: "i" } },
+        { orderStatus: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    if (cursor) {
+      if (!mongoose.Types.ObjectId.isValid(cursor)) {
+        return res.status(400).json({ message: "Invalid cursor" });
+      }
+      query._id = { $lt: new mongoose.Types.ObjectId(cursor) };
+    }
+
+    const orders = await Order.find(query)
+      .sort({ _id: -1 })
+      .limit(pageSize + 1)
+      .populate("user", "name email")
+      .populate("items.product", "title price")
+      .lean();
+
+    const hasMore = orders.length > pageSize;
+    const results = hasMore ? orders.slice(0, pageSize) : orders;
+    const nextCursor =
+      results.length > 0 ? results[results.length - 1]._id : null;
+
+    res.status(200).json({
+      success: true,
+      count: results.length,
+      data: results,
+      nextCursor,
+      hasMore,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Internal server error" });
@@ -208,7 +272,28 @@ exports.updateOrderStatus = async (req, res) => {
 
     order.orderStatus = orderStatus;
     await order.save();
-    res.status(200).json({ message: "Order status updated successfully" });
+    res.status(200).json({ message: "Order status updated successfully", data: order });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+exports.deleteOrder = async (req, res) => {
+  try {
+    const orderId = req.params.id;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ message: "Invalid order ID" });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    await Order.findByIdAndDelete(orderId);
+    res.status(200).json({ message: "Order deleted successfully" });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Internal server error" });
@@ -231,6 +316,12 @@ exports.cancelOrder = async (req, res) => {
 
     if (order.orderStatus === "cancelled") {
       return res.status(400).json({ message: "Order is already cancelled" });
+    }
+
+    if (order.orderStatus === "shipped" || order.orderStatus === "delivered") {
+      return res.status(400).json({
+        message: "Cannot cancel an order that has already been shipped or delivered",
+      });
     }
 
     let refundResult = { attempted: false };
@@ -346,6 +437,74 @@ exports.handleStripeWebhook = async (req, res) => {
           order.paymentStatus = "failed";
           order.orderStatus = "cancelled";
           await order.save();
+        }
+
+        break;
+      }
+
+      case "payment_intent.succeeded": {
+        const paymentIntent = event.data.object;
+
+        // Try to find order by paymentIntentId
+        let order = await Order.findOne({ paymentIntentId: paymentIntent.id });
+
+        // If not found, try to find a checkout session linked to this payment intent
+        if (!order) {
+          try {
+            const sessions = await stripe.checkout.sessions.list({
+              payment_intent: paymentIntent.id,
+              limit: 1,
+            });
+            const session = sessions.data[0];
+            if (session && session.metadata && session.metadata.orderId) {
+              order = await Order.findById(session.metadata.orderId);
+            }
+          } catch (err) {
+            console.error(
+              "Error finding session for payment_intent:",
+              err.message,
+            );
+          }
+        }
+
+        if (order) {
+          await finalizePaidOrder(order, paymentIntent.id);
+        }
+
+        break;
+      }
+
+      case "charge.succeeded":
+      case "charge.updated": {
+        const charge = event.data.object;
+
+        // Only act on succeeded charges
+        if (charge.status !== "succeeded") break;
+
+        const paymentIntentId = charge.payment_intent;
+        if (!paymentIntentId) break;
+
+        // Try to find order by paymentIntentId
+        let order = await Order.findOne({ paymentIntentId: paymentIntentId });
+
+        // Fallback: find session and then order
+        if (!order) {
+          try {
+            const sessions = await stripe.checkout.sessions.list({
+              payment_intent: paymentIntentId,
+              limit: 1,
+            });
+            const session = sessions.data[0];
+            if (session && session.metadata && session.metadata.orderId) {
+              order = await Order.findById(session.metadata.orderId);
+            }
+          } catch (err) {
+            console.error("Error finding session for charge:", err.message);
+          }
+        }
+
+        if (order) {
+          await finalizePaidOrder(order, paymentIntentId);
         }
 
         break;
